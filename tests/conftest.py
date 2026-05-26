@@ -14,8 +14,6 @@ if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
 
 
-# ── 假 Embedding（确定性向量，相同文本 → 相同向量）────────────────
-
 def _make_fake_embedding(text: str, dim: int = 1024) -> list[float]:
     digest = hashlib.md5(text.encode("utf-8")).digest()
     seed = int.from_bytes(digest[:4], "big")
@@ -42,74 +40,55 @@ class _FakeOutput:
         return self._d[key]
 
 
-class _FakeProvider:
-    def __init__(self):
-        self.model = "fake-ci-model"
-        self.api_key = "fake-ci-key"
-
-    def generate(self, prompt: str, token_tracker=None):
-        from providers.base import GenerationResult
-        from token_tracker import TokenUsage
-        # 判断场景：精排 → 返回分数；问答 → 返回回答
-        if "相关性分数" in prompt:
-            text = "[1] 8\n[2] 9"
-        elif "改写" in prompt:
-            text = prompt.split("\n")[-1].replace("当前问题：", "").strip()
-        else:
-            text = "这是 CI 环境自动生成的测试回答。"
-        return GenerationResult(
-            text=text,
-            usage=TokenUsage(input_tokens=10, output_tokens=max(1, len(text) // 3)),
-        )
-
-    def generate_stream(self, prompt: str, token_tracker=None):
-        text = self.generate(prompt, token_tracker).text
-        for char in text:
-            yield char
-
-
-# ── CI 环境自动 mock ──────────────────────────────────────────────
-
 def _is_ci_or_fake_key() -> bool:
-    """判断是否需要 mock 外部 API：CI 环境或 API Key 是假值。"""
     key = os.environ.get("DASHSCOPE_API_KEY", "")
     return bool(os.environ.get("CI")) or key.startswith("fake-") or key == ""
 
 
 @pytest.fixture(autouse=True)
 def _mock_external_apis_in_ci():
-    """当 API Key 为假值时，mock 所有外部 API 调用。
+    """CI 环境 mock 外部 API（embedder + DashScopeProvider 类方法）。
 
-    只在 embedder / generator / query_rewriter / reranker 边界 mock，
-    内部组件（loader/chunker/ChromaDB/BM25）真实运行。
+    不在 provider 工厂层 mock，而是在 DashScopeProvider 类方法层 mock，
+    让 test_rag.py 中的 patch.object(DashScopeProvider, ...) 仍能生效。
     """
     if not _is_ci_or_fake_key():
         yield
         return
 
-    # 预导入，确保模块在 sys.modules 中再 patch
+    # 预导入，确保模块在 sys.modules 中
     import embedder  # noqa: F401
-    import generator  # noqa: F401
-    import query_rewriter  # noqa: F401
-    import reranker  # noqa: F401
+    import providers.dashscope_provider  # noqa: F401
 
     os.environ["DASHSCOPE_API_KEY"] = "fake-ci-mock-key"
+
+    from providers.base import GenerationResult
+    from token_tracker import TokenUsage
+
+    def _fake_generate(self, prompt):
+        return GenerationResult(
+            text="这是 CI 自动生成的测试回答。",
+            usage=TokenUsage(input_tokens=10, output_tokens=8),
+        )
+
+    def _fake_generate_stream(self, prompt):
+        for word in ["这是", "CI", "环境", "生成", "的", "测试", "回答", "。"]:
+            yield word
 
     with patch("embedder.TextEmbedding.call") as mock_embed:
         mock_embed.side_effect = lambda **kwargs: _FakeEmbeddingResponse(
             kwargs.get("input", ["default"]), dim=1024
         )
 
-        with patch("generator.get_provider") as mock_gen, \
-             patch("query_rewriter.get_provider") as mock_qr, \
-             patch("reranker.get_provider") as mock_rr:
-
-            fake = _FakeProvider()
-            mock_gen.return_value = fake
-            mock_qr.return_value = fake
-            mock_rr.return_value = fake
-
+        with patch.object(
+            providers.dashscope_provider.DashScopeProvider,
+            "generate",
+            _fake_generate,
+        ), patch.object(
+            providers.dashscope_provider.DashScopeProvider,
+            "generate_stream",
+            _fake_generate_stream,
+        ):
             yield
 
-    # 恢复
     os.environ["DASHSCOPE_API_KEY"] = os.environ.get("DASHSCOPE_API_KEY", "")
