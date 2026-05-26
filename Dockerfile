@@ -32,10 +32,7 @@ RUN mkdir -p /app/data/chroma_db /app/data/bm25 /app/data/logs \
 # 非 root 运行
 USER appuser
 
-# Streamlit 端口
-EXPOSE 8501
+# Streamlit + FastAPI 端口
+EXPOSE 8501 8502
 
-# 启动命令
-ENTRYPOINT ["python", "-m", "streamlit", "run", "src/app.py", \
-    "--server.address=0.0.0.0", "--server.port=8501", \
-    "--browser.gatherUsageStats=false"]
+# 启动命令由 docker-compose.yml 各自指定
