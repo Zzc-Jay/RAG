@@ -35,12 +35,111 @@ from conversation import (
 )
 from token_tracker import TokenTracker, format_cost
 from audit import log_event as audit_log, get_events as audit_get_events, get_stats as audit_get_stats
+from auth import (
+    init_streamlit_auth, create_user, authenticate_user, create_access_token,
+    migrate_global_data, set_current_user_id,
+)
 
 # 初始化日志
 setup_logging()
 logger = get_logger("app")
 
 st.set_page_config(page_title="RAG 知识库问答", page_icon="📚", layout="wide")
+
+# ── 认证状态初始化 ──────────────────────────────────────────────
+if "auth_token" not in st.session_state:
+    st.session_state.auth_token = None
+if "auth_user_id" not in st.session_state:
+    st.session_state.auth_user_id = None
+if "auth_username" not in st.session_state:
+    st.session_state.auth_username = None
+
+
+def _restore_auth_context() -> bool:
+    """每次 rerun 开头恢复用户上下文。返回是否已登录。"""
+    user = init_streamlit_auth(
+        st.session_state.auth_token,
+        st.session_state.auth_user_id,
+    )
+    if user:
+        st.session_state.auth_username = user["username"]
+        return True
+    return False
+
+
+def _do_logout():
+    st.session_state.auth_token = None
+    st.session_state.auth_user_id = None
+    st.session_state.auth_username = None
+    set_current_user_id("")
+    st.session_state.conversation = create_conversation()
+    st.session_state.turn_usage = []
+
+
+# ── 登录/注册页面 ──────────────────────────────────────────────
+if not _restore_auth_context():
+    st.markdown(
+        '<h1 style="text-align:center; margin-top:3rem;">RAG 知识库问答</h1>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<p style="text-align:center; color:#888; margin-bottom:2rem;">'
+        '多格式知识库检索问答系统</p>',
+        unsafe_allow_html=True,
+    )
+
+    tab_login, tab_register = st.tabs(["登录", "注册"])
+
+    with tab_login:
+        with st.form("login_form", clear_on_submit=False):
+            login_username = st.text_input("用户名", placeholder="输入用户名")
+            login_password = st.text_input("密码", type="password", placeholder="输入密码")
+            submitted = st.form_submit_button("登录", type="primary", use_container_width=True)
+            if submitted:
+                if not login_username or not login_password:
+                    st.error("请输入用户名和密码")
+                else:
+                    user = authenticate_user(login_username, login_password)
+                    if not user:
+                        st.error("用户名或密码错误")
+                    else:
+                        token = create_access_token(user["id"], user["username"])
+                        st.session_state.auth_token = token
+                        st.session_state.auth_user_id = user["id"]
+                        st.session_state.auth_username = user["username"]
+                        migrated = migrate_global_data(user["id"])
+                        if migrated:
+                            st.success(f"已迁移 {migrated} 个旧知识库到您的账户")
+                        logger.info(f"用户登录: '{user['username']}'")
+                        st.rerun()
+
+    with tab_register:
+        with st.form("register_form", clear_on_submit=False):
+            reg_username = st.text_input("用户名", placeholder="至少 2 个字符")
+            reg_password = st.text_input("密码", type="password", placeholder="至少 4 个字符")
+            reg_password2 = st.text_input("确认密码", type="password", placeholder="再次输入密码")
+            submitted_reg = st.form_submit_button("注册", type="primary", use_container_width=True)
+            if submitted_reg:
+                if not reg_username or not reg_password:
+                    st.error("请填写用户名和密码")
+                elif reg_password != reg_password2:
+                    st.error("两次输入的密码不一致")
+                else:
+                    try:
+                        user = create_user(reg_username, reg_password)
+                        token = create_access_token(user["id"], user["username"])
+                        st.session_state.auth_token = token
+                        st.session_state.auth_user_id = user["id"]
+                        st.session_state.auth_username = user["username"]
+                        migrated = migrate_global_data(user["id"])
+                        if migrated:
+                            st.success(f"已迁移 {migrated} 个旧知识库到您的账户")
+                        logger.info(f"新用户注册: '{user['username']}'")
+                        st.rerun()
+                    except ValueError as e:
+                        st.error(str(e))
+
+    st.stop()  # 未登录时停止渲染后续页面
 
 URL_RE = re.compile(r"^https?://", re.IGNORECASE)
 
@@ -363,6 +462,19 @@ def _export_conversation_md() -> str:
 
 # ── 侧边栏 ────────────────────────────────────────────────────────
 with st.sidebar:
+    # ── 用户信息 ────────────────────────────────────────────
+    if st.session_state.auth_username:
+        st.markdown(
+            f'<div style="display:flex;align-items:center;gap:6px;margin-bottom:4px;">'
+            f'<span style="font-size:0.9rem;font-weight:600;">'
+            f'👤 {st.session_state.auth_username}</span></div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("登出", use_container_width=True, key="logout_btn"):
+            _do_logout()
+            st.rerun()
+    st.divider()
+
     # ── 模型选择器 ──────────────────────────────────────────────
     st.markdown("## 🤖 模型选择")
 

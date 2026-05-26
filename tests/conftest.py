@@ -1,4 +1,4 @@
-"""pytest 根 conftest — 统一 src/ 路径配置 + CI 环境 mock 外部 API。"""
+"""pytest 根 conftest — 统一 src/ 路径配置 + CI 环境 mock 外部 API + 测试用户上下文。"""
 from __future__ import annotations
 
 import hashlib
@@ -12,6 +12,37 @@ import pytest
 _SRC_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src"))
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
+
+
+# ── 测试用户上下文 ─────────────────────────────────────────────────
+# 每个测试自动设置 fake 用户上下文，避免 LookupError("未设置用户上下文")
+
+@pytest.fixture(autouse=True)
+def _setup_test_user_context():
+    """为所有测试设置测试用户上下文。
+
+    1. 设置 contextvar → 直接调用内部函数时可用
+    2. 覆盖 FastAPI get_current_user 依赖 → TestClient 请求跳过 JWT 验证
+    """
+    from auth import _current_user_id, get_current_user, set_current_user_id
+    from api import app
+
+    test_user = {"id": "test-user-001", "username": "testuser"}
+
+    async def _fake_get_current_user():
+        set_current_user_id(test_user["id"])
+        return test_user
+
+    # 保存旧覆盖（如果有的话）
+    old_overrides = dict(app.dependency_overrides)
+    app.dependency_overrides[get_current_user] = _fake_get_current_user
+
+    token = _current_user_id.set(test_user["id"])
+
+    yield
+
+    _current_user_id.reset(token)
+    app.dependency_overrides = old_overrides
 
 
 def _make_fake_embedding(text: str, dim: int = 1024) -> list[float]:

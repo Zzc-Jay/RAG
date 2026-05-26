@@ -4,20 +4,55 @@ import os
 import shutil
 from datetime import date
 
-from config import DATA_DIR, BM25_DIR, CHROMA_DIR, REGISTRY_PATH
+from config import DATA_DIR
 from audit import log_event
 
 
+def _get_user_data_dir() -> str:
+    from auth import get_current_user_id
+    uid = get_current_user_id()
+    d = os.path.join(DATA_DIR, "users", uid)
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _get_registry_path() -> str:
+    return os.path.join(_get_user_data_dir(), "kb_registry.json")
+
+
+def _get_chroma_dir() -> str:
+    d = os.path.join(_get_user_data_dir(), "chroma_db")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def _get_bm25_dir() -> str:
+    d = os.path.join(_get_user_data_dir(), "bm25")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def get_chroma_dir_for_kb() -> str:
+    """供 embedder.py 获取用户隔离的 ChromaDB 根目录。"""
+    return _get_chroma_dir()
+
+
+def get_bm25_dir_for_kb() -> str:
+    """供 bm25_index.py 获取用户隔离的 BM25 根目录。"""
+    return _get_bm25_dir()
+
+
 def _load_registry() -> dict:
-    if not os.path.exists(REGISTRY_PATH):
+    path = _get_registry_path()
+    if not os.path.exists(path):
         return {}
-    with open(REGISTRY_PATH, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
 def _save_registry(registry: dict) -> None:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(REGISTRY_PATH, "w", encoding="utf-8") as f:
+    path = _get_registry_path()
+    with open(path, "w", encoding="utf-8") as f:
         json.dump(registry, f, ensure_ascii=False, indent=2)
 
 
@@ -40,7 +75,9 @@ def delete_kb(name: str) -> None:
     del registry[name]
     _save_registry(registry)
     log_event("kb.delete", kb_name=name)
-    for base in (CHROMA_DIR, BM25_DIR):
+    chroma_dir = _get_chroma_dir()
+    bm25_dir = _get_bm25_dir()
+    for base in (chroma_dir, bm25_dir):
         target = os.path.join(base, name)
         if os.path.exists(target):
             shutil.rmtree(target)
@@ -61,7 +98,9 @@ def rename_kb(old_name: str, new_name: str) -> None:
         raise ValueError(f"知识库 '{new_name}' 已存在")
     registry[new_name] = registry.pop(old_name)
     _save_registry(registry)
-    for base in (CHROMA_DIR, BM25_DIR):
+    chroma_dir = _get_chroma_dir()
+    bm25_dir = _get_bm25_dir()
+    for base in (chroma_dir, bm25_dir):
         old_dir = os.path.join(base, old_name)
         new_dir = os.path.join(base, new_name)
         if os.path.exists(old_dir):

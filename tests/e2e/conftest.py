@@ -188,8 +188,7 @@ def kb_lifecycle(kb_name: str):
     - delete_kb() 清理 registry + audit
     - 强制 rmtree ChromaDB + BM25 目录（Windows 可能文件锁）
     """
-    from kb_manager import create_kb, delete_kb
-    from config import CHROMA_DIR, BM25_DIR
+    from kb_manager import create_kb, delete_kb, get_chroma_dir_for_kb, get_bm25_dir_for_kb
 
     create_kb(kb_name)
 
@@ -200,7 +199,7 @@ def kb_lifecycle(kb_name: str):
     except (ValueError, PermissionError):
         pass
 
-    for base in (CHROMA_DIR, BM25_DIR):
+    for base in (get_chroma_dir_for_kb(), get_bm25_dir_for_kb()):
         target = os.path.join(base, kb_name)
         if os.path.exists(target):
             try:

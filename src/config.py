@@ -6,6 +6,12 @@ DASHSCOPE_API_KEY: str = os.getenv("DASHSCOPE_API_KEY", "")
 DEEPSEEK_API_KEY: str = os.getenv("DEEPSEEK_API_KEY", "")
 DOUBAO_API_KEY: str = os.getenv("DOUBAO_API_KEY", "")
 
+# --- Auth ---
+JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "rag-dev-secret-change-in-production")
+JWT_ALGORITHM: str = "HS256"
+JWT_EXPIRE_HOURS: int = 24
+
+
 
 def get_api_keys() -> dict[str, str]:
     """返回所有 provider API Key 的字典，供 get_provider() 工厂使用。"""
@@ -69,6 +75,11 @@ MODEL_LABELS: dict[str, str] = {
     "doubao-seed-2.0-lite": "豆包 Seed 2.0 Lite (字节)",
     "doubao-seed-2.0-mini": "豆包 Seed 2.0 Mini (字节)",
 }
+
+# --- Multi-tenancy ---
+def get_user_data_dir(user_id: str) -> str:
+    """返回用户的隔离数据目录路径。"""
+    return os.path.join(DATA_DIR, "users", user_id)
 
 # --- Retry (API 容错) ---
 MAX_RETRIES: int = 3

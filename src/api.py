@@ -16,7 +16,7 @@ import os
 import tempfile
 from collections.abc import Generator
 
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, UploadFile, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
@@ -34,6 +34,10 @@ from kb_manager import (
 )
 from security import validate_question, validate_kb_name, validate_file_extension
 from audit import log_event, get_events, count_events
+from auth import (
+    create_user, authenticate_user, create_access_token, get_current_user,
+    get_user_by_id, migrate_global_data,
+)
 
 # ── App ─────────────────────────────────────────────────────────────
 app = FastAPI(
@@ -168,6 +172,30 @@ class BatchURLResponse(BaseModel):
     failed: int
 
 
+# ── Auth Models ─────────────────────────────────────────────
+
+class RegisterRequest(BaseModel):
+    username: str = Field(..., min_length=2, max_length=30, description="用户名")
+    password: str = Field(..., min_length=4, max_length=100, description="密码")
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1, description="用户名")
+    password: str = Field(..., min_length=1, description="密码")
+
+
+class AuthResponse(BaseModel):
+    token: str
+    user_id: str
+    username: str
+
+
+class UserInfo(BaseModel):
+    id: str
+    username: str
+    created_at: str
+
+
 # ═══════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════
@@ -221,12 +249,54 @@ def health_check():
 
 
 # ═══════════════════════════════════════════════════════════════
+# Auth
+# ═══════════════════════════════════════════════════════════════
+
+@app.post("/auth/register", status_code=201, tags=["Auth"])
+def api_register(body: RegisterRequest):
+    """注册新用户。用户名全局唯一，密码至少 4 位。"""
+    try:
+        user = create_user(body.username, body.password)
+    except ValueError as e:
+        raise HTTPException(409, str(e))
+    token = create_access_token(user["id"], user["username"])
+    # 尝试迁移旧全局数据
+    migrated = migrate_global_data(user["id"])
+    return {
+        **AuthResponse(token=token, user_id=user["id"], username=user["username"]).model_dump(),
+        "migrated_kbs": migrated,
+    }
+
+
+@app.post("/auth/login", tags=["Auth"])
+def api_login(body: LoginRequest):
+    """登录，返回 JWT token。后续请求在 Authorization header 中携带。"""
+    user = authenticate_user(body.username, body.password)
+    if not user:
+        raise HTTPException(401, "用户名或密码错误")
+    token = create_access_token(user["id"], user["username"])
+    # 尝试迁移旧全局数据
+    migrated = migrate_global_data(user["id"])
+    return {
+        **AuthResponse(token=token, user_id=user["id"], username=user["username"]).model_dump(),
+        "migrated_kbs": migrated,
+    }
+
+
+@app.get("/auth/me", tags=["Auth"])
+def api_me(current_user: dict = Depends(get_current_user)):
+    """获取当前登录用户信息。"""
+    user = get_user_by_id(current_user["id"])
+    return UserInfo(**user)
+
+
+# ═══════════════════════════════════════════════════════════════
 # KB CRUD
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/kb", tags=["Knowledge Base"])
-def api_list_kbs():
-    """列出所有知识库及其文档详情。"""
+def api_list_kbs(current_user: dict = Depends(get_current_user)):
+    """列出当前用户的所有知识库及其文档详情。"""
     kbs: list[KBInfo] = []
     for name in list_kbs():
         try:
@@ -245,7 +315,7 @@ def api_list_kbs():
     "/api/kb", status_code=201, tags=["Knowledge Base"],
     responses={409: {"model": ErrorResponse}},
 )
-def api_create_kb(body: KBCreateRequest):
+def api_create_kb(body: KBCreateRequest, current_user: dict = Depends(get_current_user)):
     """创建新知识库。名称只能包含中文、英文、数字、下划线。"""
     try:
         name = validate_kb_name(body.name)
@@ -259,7 +329,7 @@ def api_create_kb(body: KBCreateRequest):
     "/api/kb/{name}", tags=["Knowledge Base"],
     responses={404: {"model": ErrorResponse}},
 )
-def api_delete_kb(name: str):
+def api_delete_kb(name: str, current_user: dict = Depends(get_current_user)):
     """删除知识库，同时清理其下的 ChromaDB 和 BM25 数据。"""
     try:
         delete_kb(name)
@@ -273,7 +343,7 @@ def api_delete_kb(name: str):
 # ═══════════════════════════════════════════════════════════════
 
 @app.get("/api/kb/{name}/docs", tags=["Documents"])
-def api_list_docs(name: str):
+def api_list_docs(name: str, current_user: dict = Depends(get_current_user)):
     """列出某知识库的所有已入库文档。"""
     try:
         docs = get_kb_docs(name)
@@ -283,7 +353,7 @@ def api_list_docs(name: str):
 
 
 @app.post("/api/kb/{name}/docs/upload", status_code=201, tags=["Documents"])
-def api_upload_file(name: str, file: UploadFile = File(...)):
+def api_upload_file(name: str, file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     """上传文件（PDF/TXT/MD/DOCX）到知识库。"""
     if name not in list_kbs():
         raise HTTPException(404, f"知识库 '{name}' 不存在")
@@ -307,7 +377,7 @@ def api_upload_file(name: str, file: UploadFile = File(...)):
 
 
 @app.post("/api/kb/{name}/docs/url", status_code=201, tags=["Documents"])
-def api_load_url(name: str, body: URLLoadRequest):
+def api_load_url(name: str, body: URLLoadRequest, current_user: dict = Depends(get_current_user)):
     """抓取网页内容并入库。"""
     import re
     if not re.match(r"^https?://", body.url):
@@ -329,7 +399,7 @@ def api_load_url(name: str, body: URLLoadRequest):
     "/api/kb/{name}/docs/{doc_name}", tags=["Documents"],
     responses={404: {"model": ErrorResponse}},
 )
-def api_delete_doc(name: str, doc_name: str):
+def api_delete_doc(name: str, doc_name: str, current_user: dict = Depends(get_current_user)):
     """从知识库中移除文档，清理其向量 chunk 并重建 BM25 索引。"""
     if name not in list_kbs():
         raise HTTPException(404, f"知识库 '{name}' 不存在")
@@ -360,7 +430,7 @@ def api_delete_doc(name: str, doc_name: str):
     "/api/kb/{name}/docs/upload/batch", status_code=201, tags=["Documents"],
     responses={404: {"model": ErrorResponse}},
 )
-def api_upload_files_batch(name: str, files: list[UploadFile] = File(...)):
+def api_upload_files_batch(name: str, files: list[UploadFile] = File(...), current_user: dict = Depends(get_current_user)):
     """批量上传文件 — 一次上传多个文件，返回每个文件的处理结果。
 
     单个文件失败不影响其他文件继续处理，最后统一重建 BM25 索引。
@@ -436,7 +506,7 @@ def api_upload_files_batch(name: str, files: list[UploadFile] = File(...)):
     "/api/kb/{name}/docs/delete/batch", tags=["Documents"],
     responses={404: {"model": ErrorResponse}},
 )
-def api_delete_docs_batch(name: str, body: BatchDeleteRequest):
+def api_delete_docs_batch(name: str, body: BatchDeleteRequest, current_user: dict = Depends(get_current_user)):
     """批量删除文档 — 一次删除多个文档，最后统一重建 BM25 索引。"""
     if name not in list_kbs():
         raise HTTPException(404, f"知识库 '{name}' 不存在")
@@ -479,7 +549,7 @@ def api_delete_docs_batch(name: str, body: BatchDeleteRequest):
     "/api/kb/{name}/docs/url/batch", status_code=201, tags=["Documents"],
     responses={404: {"model": ErrorResponse}},
 )
-def api_load_urls_batch(name: str, body: BatchURLRequest):
+def api_load_urls_batch(name: str, body: BatchURLRequest, current_user: dict = Depends(get_current_user)):
     """批量导入网页 — 一次导入多个 URL，返回每个 URL 的处理结果。"""
     import re as _url_re
 
@@ -522,7 +592,7 @@ def api_load_urls_batch(name: str, body: BatchURLRequest):
 # ═══════════════════════════════════════════════════════════════
 
 @app.post("/api/kb/{name}/query", tags=["Query"])
-def api_query(name: str, body: QueryRequest):
+def api_query(name: str, body: QueryRequest, current_user: dict = Depends(get_current_user)):
     """同步问答 — 返回完整回答。
 
     原理：用户问题 → 向量嵌入 → ChromaDB 检索 + BM25 关键词检索 → RRF 融合
@@ -597,6 +667,7 @@ def api_query_stream(
     rewrite: bool = Query(default=False, description="是否启用查询改写"),
     history: str = Query(default="", description="对话历史文本"),
     rerank: bool = Query(default=False, description="是否启用 LLM 精排"),
+    current_user: dict = Depends(get_current_user),
 ):
     """流式问答 — SSE 协议逐 token 返回回答。
 
@@ -656,6 +727,7 @@ def api_audit_log(
     event_type: str = Query(default="", description="按事件类型筛选"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    current_user: dict = Depends(get_current_user),
 ):
     """审计日志查询 — 分页返回操作记录，支持按知识库和事件类型筛选。
 

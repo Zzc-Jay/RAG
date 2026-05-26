@@ -6,7 +6,7 @@ import time
 import chromadb
 from dashscope import TextEmbedding
 
-from config import CHROMA_DIR, BATCH_SIZE, EMBEDDING_MODEL, TOP_K, DASHSCOPE_API_KEY, DATA_DIR
+from config import BATCH_SIZE, EMBEDDING_MODEL, TOP_K, DASHSCOPE_API_KEY
 from retry import retry_call
 from logging_config import get_logger
 from embedding_cache import lookup, store, cache_hit_rate, get_stats as get_cache_stats
@@ -25,7 +25,8 @@ def _collection_name(kb_name: str) -> str:
 
 def _get_collection(kb_name: str):
     """获取或创建 ChromaDB collection，每个知识库一个 collection。"""
-    persist_dir = os.path.join(CHROMA_DIR, kb_name)
+    from kb_manager import get_chroma_dir_for_kb
+    persist_dir = os.path.join(get_chroma_dir_for_kb(), kb_name)
     client = chromadb.PersistentClient(path=persist_dir)
     name = _collection_name(kb_name)
     try:

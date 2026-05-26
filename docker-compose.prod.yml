@@ -1,0 +1,39 @@
+# 生产环境 — 使用 ghcr.io 远程镜像，无需本地构建
+services:
+  app:
+    image: ghcr.io/zzc-jay/rag:latest
+    container_name: rag-app
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    command:
+      [
+        "python", "-m", "streamlit", "run", "src/app.py",
+        "--server.address=0.0.0.0",
+        "--server.port=8501",
+        "--browser.gatherUsageStats=false"
+      ]
+    restart: unless-stopped
+
+  api:
+    image: ghcr.io/zzc-jay/rag:latest
+    container_name: rag-api
+    ports:
+      - "8502:8502"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      - PYTHONPATH=/app/src
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    command:
+      ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8502"]
+    restart: unless-stopped
+    depends_on:
+      - app

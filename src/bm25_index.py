@@ -5,11 +5,10 @@ import pickle
 import jieba
 from rank_bm25 import BM25Okapi
 
-from config import BM25_DIR
-
-
 def _bm25_path(kb_name: str) -> str:
-    kb_dir = os.path.join(BM25_DIR, kb_name)
+    from kb_manager import get_bm25_dir_for_kb
+    bm25_dir = get_bm25_dir_for_kb()
+    kb_dir = os.path.join(bm25_dir, kb_name)
     os.makedirs(kb_dir, exist_ok=True)
     return os.path.join(kb_dir, "bm25.pkl")
 
