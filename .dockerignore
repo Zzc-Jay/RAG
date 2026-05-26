@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 虚拟环境
+env/
+.venv/
+venv/
+
+# 数据目录（通过 volume 挂载）
+data/
+
+# Git
+.git/
+.gitignore
+
+# 开发文件
+docs/
+tests/
+.env.example
+
+# IDE
+.vscode/
+.idea/
+
+# Docker 自身
+Dockerfile
+docker-compose.yml
+.dockerignore

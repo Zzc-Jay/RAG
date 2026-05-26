@@ -1,0 +1,17 @@
+version: "3.9"
+
+services:
+  app:
+    build: .
+    container_name: rag-app
+    ports:
+      - "8501:8501"
+    volumes:
+      # 持久化数据：ChromaDB 向量 + BM25 索引 + 注册表 + 日志
+      - ./data:/app/data
+    env_file:
+      - .env
+    environment:
+      # 通过环境变量覆盖日志级别
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
