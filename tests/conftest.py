@@ -40,6 +40,45 @@ class _FakeOutput:
         return self._d[key]
 
 
+def _make_fake_gen_response(stream: bool = False):
+    """创建假的 DashScope Generation 响应，兼容新旧格式。"""
+    if stream:
+        return _FakeStreamGenResponse()
+    return _FakeNonStreamGenResponse()
+
+
+class _FakeStreamGenResponse:
+    """流式响应 — 迭代器（支持 next(iter(resp)) + for chunk in resp）。"""
+    def __init__(self):
+        chunks = ["这是", "CI", "环境", "生成", "的", "测试", "回答", "。"]
+        self._chunks = iter(chunks)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        chunk_text = next(self._chunks)
+        chunk = MagicMock()
+        chunk.status_code = 200
+        choice = MagicMock()
+        choice.message.content = chunk_text
+        chunk.output.choices = [choice]
+        return chunk
+
+
+class _FakeNonStreamGenResponse:
+    """非流式响应 — 旧格式 output.text（qwen-plus 用）。"""
+    status_code = 200
+    message = ""
+
+    class output:
+        text = "这是 CI 自动生成的测试回答。"
+
+    class usage:
+        input_tokens = 10
+        output_tokens = 8
+
+
 def _is_ci_or_fake_key() -> bool:
     key = os.environ.get("DASHSCOPE_API_KEY", "")
     return bool(os.environ.get("CI")) or key.startswith("fake-") or key == ""
@@ -47,10 +86,9 @@ def _is_ci_or_fake_key() -> bool:
 
 @pytest.fixture(autouse=True)
 def _mock_external_apis_in_ci():
-    """CI 环境 mock 外部 API（embedder + DashScopeProvider 类方法）。
+    """CI 环境 mock DashScope API 调用（embedding + generation）。
 
-    不在 provider 工厂层 mock，而是在 DashScopeProvider 类方法层 mock，
-    让 test_rag.py 中的 patch.object(DashScopeProvider, ...) 仍能生效。
+    在 dashscope API 入口层 mock，让上层测试各自的 mock 仍能生效。
     """
     if not _is_ci_or_fake_key():
         yield
@@ -58,37 +96,19 @@ def _mock_external_apis_in_ci():
 
     # 预导入，确保模块在 sys.modules 中
     import embedder  # noqa: F401
-    import providers.dashscope_provider  # noqa: F401
 
     os.environ["DASHSCOPE_API_KEY"] = "fake-ci-mock-key"
-
-    from providers.base import GenerationResult
-    from token_tracker import TokenUsage
-
-    def _fake_generate(self, prompt):
-        return GenerationResult(
-            text="这是 CI 自动生成的测试回答。",
-            usage=TokenUsage(input_tokens=10, output_tokens=8),
-        )
-
-    def _fake_generate_stream(self, prompt):
-        for word in ["这是", "CI", "环境", "生成", "的", "测试", "回答", "。"]:
-            yield word
 
     with patch("embedder.TextEmbedding.call") as mock_embed:
         mock_embed.side_effect = lambda **kwargs: _FakeEmbeddingResponse(
             kwargs.get("input", ["default"]), dim=1024
         )
 
-        with patch.object(
-            providers.dashscope_provider.DashScopeProvider,
-            "generate",
-            _fake_generate,
-        ), patch.object(
-            providers.dashscope_provider.DashScopeProvider,
-            "generate_stream",
-            _fake_generate_stream,
-        ):
+        with patch("dashscope.Generation.call") as mock_gen:
+            mock_gen.side_effect = lambda **kw: _make_fake_gen_response(
+                stream=kw.get("stream", False)
+            )
+
             yield
 
     os.environ["DASHSCOPE_API_KEY"] = os.environ.get("DASHSCOPE_API_KEY", "")
