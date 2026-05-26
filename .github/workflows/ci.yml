@@ -15,7 +15,11 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
-      - run: python -m pytest tests/ -v --tb=short
+      - run: |
+          mkdir -p /tmp/rag-test-data
+          python -m pytest tests/ -v --tb=short --basetemp=/tmp/pytest-tmp
         env:
           DASHSCOPE_API_KEY: fake-ci-key
           RAG_DATA_DIR: /tmp/rag-test-data
+          TMPDIR: /tmp
+          SQLITE_TMPDIR: /tmp
