@@ -17,7 +17,7 @@ def get_api_keys() -> dict[str, str]:
 
 # --- Paths ---
 BASE_DIR: str = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR: str = os.path.join(BASE_DIR, "data")
+DATA_DIR: str = os.getenv("RAG_DATA_DIR", os.path.join(BASE_DIR, "data"))
 CHROMA_DIR: str = os.path.join(DATA_DIR, "chroma_db")
 BM25_DIR: str = os.path.join(DATA_DIR, "bm25")
 REGISTRY_PATH: str = os.path.join(DATA_DIR, "kb_registry.json")

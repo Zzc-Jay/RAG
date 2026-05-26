@@ -18,3 +18,4 @@ jobs:
       - run: python -m pytest tests/ -v --tb=short
         env:
           DASHSCOPE_API_KEY: fake-ci-key
+          RAG_DATA_DIR: /tmp/rag-test-data
