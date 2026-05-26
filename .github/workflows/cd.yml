@@ -32,6 +32,10 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+      - name: Lowercase repo owner for ghcr.io
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          echo "REPO_OWNER_LOWER=${OWNER,,}" >> $GITHUB_ENV
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -42,5 +46,5 @@ jobs:
           context: .
           push: true
           tags: |
-            ghcr.io/${{ github.repository_owner }}/rag:latest
-            ghcr.io/${{ github.repository_owner }}/rag:${{ github.sha }}
+            ghcr.io/${{ env.REPO_OWNER_LOWER }}/rag:latest
+            ghcr.io/${{ env.REPO_OWNER_LOWER }}/rag:${{ github.sha }}
